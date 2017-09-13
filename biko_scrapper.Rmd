@@ -1,0 +1,320 @@
+---
+title: "Biko's Posts"
+output: html_notebook
+---
+
+
+
+```{r, echo=FALSE}
+library(tidyverse)
+library(rvest)
+biko_stories <- NULL
+for (i in 1:68){
+  biko_page <- paste0("http://www.bikozulu.co.ke/page/",i,"/")
+  biko_pages <- read_html(biko_page) %>% html_nodes(xpath='//h2/a') %>% html_attr("href")
+  biko_title <- read_html(biko_page) %>% html_nodes(xpath='//h2/a') %>% html_text()
+  biko_date <- read_html(biko_page) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "updated", " " ))]') %>% html_text()
+  biko_category <- read_html(biko_page) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "post_category", " " ))]') %>% html_text()
+  # biko_comments <- read_html(biko_page) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "post-comments-footer", " " ))]') %>% html_text()
+  # biko_hearts <- read_html(biko_page) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "hercules-likes", " " ))]') %>% html_text()
+  biko_sto <- data.frame(biko_title,biko_pages,biko_date,biko_category)
+  names(biko_sto) <- c("biko_title","biko_pages","biko_date","biko_category")
+  biko_stories <- rbind(biko_stories,biko_sto[-1,])
+}
+```
+
+next we read the stories on the pages
+```{r,echo=FALSE}
+biko_stories$biko_title <- as.character(biko_stories$biko_title)
+biko_stories$biko_category <- as.character(biko_stories$biko_category)
+biko_stories$biko_pages <- as.character(biko_stories$biko_pages)
+biko_stories$biko_date <- as.character(biko_stories$biko_date)
+biko_stories <- biko_stories[-199,]
+stories_all <- NULL
+for (i in 200:length(biko_stories$biko_title)){
+  stori <- read_html(biko_stories$biko_pages[i]) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "post_content", " " ))]') %>% html_text()
+  page <- biko_stories$biko_pages[i]
+  stories <- data.frame(biko_pages=page, stori=stori)
+  stories_all <- rbind(stories_all,stories)
+}
+stories_all$biko_pages <- as.character(stories_all$biko_pages)
+stories_all$stori <- as.character(stories_all$stori)
+stories_all$stori <- gsub("\n","",gsub("\t","",stories_all$stori))
+biko_posts <- left_join(biko_stories,stories_all, by="biko_pages")
+```
+
+
+```{r}
+library(tidytext)
+library(ggthemes)
+biko_posts$biko_dat <- gsub("\\.","-",biko_posts$biko_date) %>% lubridate::dmy()
+bigrams <- biko_posts %>%
+  unnest_tokens(bigram, stori, token="ngrams",n=2, collapse=FALSE) %>% #separe the stories into a series of two words
+  separate(bigram, c("word1","word2"), sep=" ") %>% #seprate the bi-word into 2
+  #filter(word1 %in% c("he", "she","my","our")) %>% #pick out the pronouns associated with verbs
+  filter(word1 %in% c("he", "she"))
+
+bigrams2 <- bigrams
+bigrams2$word1[bigrams2$word1 %in% c("my","our")] <- "he"
+  
+#picking the pronouns with more than 200 mentions
+pronouns_he_she <- bigrams %>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1,word2) %>%
+  spread(word1, n, fill=0) %>%
+  mutate(total=he+she,
+         he=(he+1)/sum(he+1),
+         she=(she+1)/sum(she+1),
+         log_ratio=log2(she/he),
+         abs_ratio=abs(log_ratio)) %>%
+  arrange(desc(log_ratio))
+
+pronouns_he_she %>%
+  group_by(log_ratio<0) %>%
+  top_n(15, abs_ratio) %>%
+  ungroup() %>%
+  mutate(word=reorder(word2, log_ratio)) %>%
+  ggplot(aes(word, log_ratio, color=log_ratio<0))+
+  geom_segment(aes(x=word, xend=word,
+                   y=0, yend=log_ratio),
+               size=1.1, alpha=0.6)+
+  geom_point(size=3.5)+
+  coord_flip()+ theme_economist()+
+  labs(x=NULL,
+       y="Relative appearance after 'she' compared to 'he'",
+       title="Words paired with 'he' and 'she' in Biko Zulu's articles")+
+  scale_color_discrete(name="",labels=c("More 'she'","More 'he'"))+
+  scale_y_continuous(breaks=seq(-3,3),
+                     labels=c("8x","4x","2X","same","2x","4x","8x"))
+
+```
+```{r}
+library(scales)
+pronouns_he_she %>%
+  filter(!word2 %in% c("himself", "herself", "she")) %>%
+  ggplot(aes(total, log_ratio)) +
+  geom_point() + theme_economist()+
+  scale_x_log10(breaks = c(100, 1000, 10000, 1e5),
+                labels = comma_format()) +
+  geom_text(aes(label = word2), vjust = 1, hjust = 1,
+            check_overlap = TRUE) +
+  scale_y_continuous(breaks = seq(-2, 2),
+                     labels = c('4X "he"', '2X "he"', "Same", '2X "she"', '4X "she"')) +
+  labs(x = 'Total uses after "he" or "she" (note log scale)',
+       y = 'Relative uses after "she" to after "he"',
+       title = "Gendered verbs: comparing frequency to pronoun shift",
+       subtitle = "Only words occurring at least 100 times after he/she. Overlapping labels were removed.") +
+  expand_limits(x = 75)
+```
+
+```{r}
+single_lady <- NULL
+for (i in 1:2){
+potentash <- paste0("http://www.potentash.com/category/relationships-2/single-lady-in-nairobi/page/",i,"/")
+stori_titles <- read_html(potentash) %>% html_nodes(xpath="//h2/a") %>% html_text()
+stori_links <- read_html(potentash) %>% html_nodes(xpath="//h2/a") %>% html_attr("href")
+story_dates <- read_html(potentash) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "year", " " ))]') %>% html_text()
+single <- data.frame(title=stori_titles,url=stori_links,date_posted=story_dates)
+single_lady <- rbind(single_lady,single)
+single_lady$title <- as.character(single_lady$title)
+single_lady$url <- as.character(single_lady$url)
+single_lady$date_posted <- as.character(single_lady$date_posted)
+potentash_series <- NULL
+for (j in 1:length(single_lady$url)){
+  story_full <- read_html(single_lady$url[j]) %>% html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "entry-content", " " ))]') %>% html_text()
+  story_full <- gsub("\t","",gsub("\n","",story_full))
+  potentash_single <- data.frame(url=single_lady$url[j],story=story_full)
+  potentash_series <- rbind(potentash_series,potentash_single)
+}
+potentash_series$url <- as.character(potentash_series$url)
+potentash_series$story <- as.character(potentash_series$story)
+}
+potentash_single_lady <- left_join(single_lady,potentash_series, by="url")
+```
+
+```{r}
+potentash_single_lady$date_posted<- gsub("\\,","",gsub(" ","-",potentash_single_lady$date_posted)) %>% lubridate::mdy()
+two_words <- potentash_single_lady %>%
+  unnest_tokens(bigram, story, token="ngrams",n=2, collapse=FALSE) %>% #separe the stories into a series of two words
+  separate(bigram, c("word1","word2"), sep=" ") %>% #seprate the bi-word into 2
+  #filter(word1 %in% c("he", "she","my","our")) %>% #pick out the pronouns associated with verbs
+  filter(word1 %in% c("he", "she"))%>%
+  filter(!word2 %in% stop_words$word) %>%
+  count(word1,word2) %>%
+  spread(word1, n, fill=0) %>%
+  mutate(total=he+she,
+         he=(he+1)/sum(he+1),
+         she=(she+1)/sum(she+1),
+         log_ratio=log2(she/he),
+         abs_ratio=abs(log_ratio)) %>%
+  arrange(desc(log_ratio))
+
+two_words %>%
+  group_by(log_ratio<0) %>%
+  top_n(15, abs_ratio) %>%
+  ungroup() %>%
+  mutate(word=reorder(word2, log_ratio)) %>%
+  ggplot(aes(word, log_ratio, color=log_ratio<0))+
+  geom_segment(aes(x=word, xend=word,
+                   y=0, yend=log_ratio),
+               size=1.1, alpha=0.6)+
+  geom_point(size=3.5)+
+  coord_flip()+ theme_economist()+
+  labs(x=NULL,
+       y="Relative appearance after 'she' compared to 'he'",
+       title="Words paired with 'he' and 'she' in Potentash's articles",
+       subtitle="Women are Victims and men are perpetrators")+
+  scale_color_discrete(name="",labels=c("More 'she'","More 'he'"))+
+  scale_y_continuous(breaks=seq(-3,3),
+                     labels=c("0.125x","0.25x","0.5X","same","2x","4x","8x"))
+```
+
+
+```{r}
+library(tidytext)
+library(ggthemes)
+biko_posts$biko_dat <- gsub("\\.","-",biko_posts$biko_date) %>% lubridate::dmy()
+bigrams <- biko_posts %>%
+  unnest_tokens(bigram, stori, token="ngrams",n=2, collapse=FALSE) %>% #separe the stories into a series of two words
+  separate(bigram, c("word1","word2"), sep=" ") %>% #seprate the bi-word into 2
+  #filter(word1 %in% c("he", "she","my","our")) %>% #pick out the pronouns associated with verbs
+  filter(word1 %in% c("he", "she")) %>%
+  filter(!word2 %in% c("isnâ€™t","couldnâ€™t","didnâ€™t","doesnâ€™t","wasnâ€™t"))
+
+Before_tamms <- bigrams %>%
+  filter(biko_dat<"2011-01-17")
+
+tams_kim <- bigrams %>%
+  filter(biko_dat>="2011-01-17" & biko_dat<"2016-06-15")
+
+after_kim <- bigrams %>%
+  filter(biko_dat>="2016-06-15")
+
+log_pronouns <- function(x){
+  x%>%
+  filter(!word2 %in% c(stop_words$word,"goats","isnâ€™t","didnâ€™t","doesnâ€™t","couldnâ€™t")) %>%
+  count(word1,word2) %>%
+  spread(word1, n, fill=0) %>%
+  mutate(total=he+she,
+         he=(he+1)/sum(he+1),
+         she=(she+1)/sum(she+1),
+         log_ratio=log2(she/he),
+         abs_ratio=abs(log_ratio)) %>%
+  arrange(desc(log_ratio))
+}
+
+before_tamms <- log_pronouns(Before_tamms)
+
+library(scales)
+before_tamms %>%
+  filter(!word2 %in% c("himself", "herself", "she")) %>%
+  ggplot(aes(total, log_ratio)) +
+  geom_point() + theme_economist()+
+  scale_x_log10(breaks = c(100, 1000, 10000, 1e5),
+                labels = comma_format()) +
+  geom_text(aes(label = word2), vjust = 1, hjust = 1,
+            check_overlap = TRUE) + theme(plot.title = element_text(size=10))+
+  scale_y_continuous(breaks = seq(-2, 2),
+                     labels = c('4X "he"', '2X "he"', "Same", '2X "she"', '4X "she"')) +
+  labs(x = 'Number of times used after "he" or "she"',
+       y = 'Relative uses after "she" to after "he"') +
+  expand_limits(x = 75)+
+  ggtitle("Words paired with 'he' and 'she' in Biko Zulu's articles before Fatherhood")
+
+
+tams_kims <- log_pronouns(tams_kim)
+
+library(scales)
+tams_kims %>%
+  filter(!word2 %in% c("himself", "herself", "she")) %>%
+  ggplot(aes(total, log_ratio)) +
+  geom_point() + theme_economist()+
+  scale_x_log10(breaks = c(100, 1000, 10000, 1e5),
+                labels = comma_format()) +
+  geom_text(aes(label = word2), vjust = 1, hjust = 1,
+            check_overlap = TRUE) + theme(plot.title = element_text(size=10))+
+  scale_y_continuous(breaks = seq(-2, 2),
+                     labels = c('4X "he"', '2X "he"', "Same", '2X "she"', '4X "she"')) +
+  labs(x = 'Number of times used after "he" or "she"',
+       y = 'Relative uses after "she" to after "he"') +
+  expand_limits(x = 75)+
+  ggtitle("Words paired with 'he' and 'she' in Biko Zulu's articles after Daughter's Birth")
+
+
+afterkim <- log_pronouns(after_kim)
+
+library(scales)
+afterkim %>%
+  filter(!word2 %in% c("himself", "herself", "she")) %>%
+  ggplot(aes(total, log_ratio)) +
+  geom_point() + theme_economist()+
+  scale_x_log10(breaks = c(100, 1000, 10000, 1e5),
+                labels = comma_format()) +
+  geom_text(aes(label = word2), vjust = 1, hjust = 1,
+            check_overlap = TRUE) + theme(plot.title = element_text(size=10))+
+  scale_y_continuous(breaks = seq(-2, 2),
+                     labels = c('4X "he"', '2X "he"', "Same", '2X "she"', '4X "she"')) +
+  labs(x = 'Number of times used after "he" or "she"',
+       y = 'Relative uses after "she" to after "he"') +
+  expand_limits(x = 75)+
+  ggtitle("Words paired with 'he' and 'she' in Biko Zulu's articles after Son's Birth")
+```
+
+```{r}
+library(rvest)
+library(tidyverse)
+library(tidytext)
+
+owaah_all <- NULL
+for (i in 1:19){
+  owaah_pages <- paste0("http://owaahh.com/page/",i,"/")
+  owaah_links <- read_html(owaah_pages) %>% html_nodes(xpath="//h2/a") %>% 
+    html_attr("href")
+  owaah_titles <- read_html(owaah_pages) %>% html_nodes(xpath="//h2/a") %>% 
+    html_text()
+  owaah <- data.frame(owaah_links,owaah_pages)
+  owaah$owaah_links <- as.character(owaah$owaah_links)
+  owaah$owaah_pages <- as.character(owaah$owaah_pages)
+  owaah_stori <- NULL
+  for(j in 1:length(owaah$owaah_links)){
+    owaah_story <- read_html(owaah_links[j])%>% 
+      html_nodes(xpath='//*[contains(concat( " ", @class, " " ), concat( " ", "entry-content", " " ))]')%>%
+      html_text()
+    owaah_story <- gsub("\n","",gsub("\t","",owaah_story))
+    owaah_stories <- data.frame(owaah_story,owaah_links=owaah$owaah_links[j])
+    owaah_stories$owaah_story <- as.character(owaah_stories$owaah_story)
+    owaah_stories$owaah_links <- as.character(owaah_stories$owaah_links)
+    owaah_stori <- rbind(owaah_stori,owaah_stories)
+  }
+  owaah_storiesall <- left_join(owaah,owaah_stori, by="owaah_links")
+  owaah_all <- rbind(owaah_all, owaah_storiesall)
+}
+
+
+owaah_bigrams <- owaah_all %>%
+  unnest_tokens(bigram, owaah_story, token="ngrams",n=2, collapse=FALSE) %>% #separe the stories into a series of two words
+  separate(bigram, c("word1","word2"), sep=" ") %>% #seprate the bi-word into 2
+  #filter(word1 %in% c("he", "she","my","our")) %>% #pick out the pronouns associated with verbs
+  filter(word1 %in% c("he", "she")) %>%
+  filter(!word2 %in% c("isnâ€™t","couldnâ€™t","didnâ€™t","doesnâ€™t","wasnâ€™t"))
+
+owaah_he_she <- log_pronouns(owaah_bigrams)
+
+library(scales)
+library(ggthemes)
+owaah_he_she %>%
+  filter(!word2 %in% c("himself", "herself", "she")) %>%
+  ggplot(aes(total, log_ratio)) +
+  geom_point() + theme_economist()+
+  scale_x_log10(breaks = c(100, 1000, 10000, 1e5),
+                labels = comma_format()) +
+  geom_text(aes(label = word2), vjust = 1, hjust = 1,
+            check_overlap = TRUE) + theme(plot.title = element_text(size=10))+
+  scale_y_continuous(breaks = seq(-2, 2),
+                     labels = c('4X "he"', '2X "he"', "Same", '2X "she"', '4X "she"')) +
+  labs(x = 'Number of times used after "he" or "she"',
+       y = 'Relative uses after "she" to after "he"') +
+  expand_limits(x = 75)+
+  ggtitle("Words paired with 'he' and 'she' in Owaah's articles")
+```
+
